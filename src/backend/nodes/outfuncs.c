@@ -2663,6 +2663,7 @@ _outIndexStmt(StringInfo str, const IndexStmt *node)
 	WRITE_BOOL_FIELD(isconstraint);
 	WRITE_BOOL_FIELD(deferrable);
 	WRITE_BOOL_FIELD(initdeferred);
+	WRITE_BOOL_FIELD(indefdeferred);
 	WRITE_BOOL_FIELD(concurrent);
 	WRITE_BOOL_FIELD(is_split_part);
 	WRITE_OID_FIELD(parentIndexId);

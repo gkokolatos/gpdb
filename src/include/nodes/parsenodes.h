@@ -1936,7 +1936,8 @@ typedef enum ConstrType			/* types of constraints */
 	CONSTR_ATTR_DEFERRABLE,		/* attributes for previous constraint node */
 	CONSTR_ATTR_NOT_DEFERRABLE,
 	CONSTR_ATTR_DEFERRED,
-	CONSTR_ATTR_IMMEDIATE
+	CONSTR_ATTR_IMMEDIATE,
+	CONSTR_ATTR_INDEFINATE = 20		/* GPDB: this denotes a no-op */
 } ConstrType;
 
 /* Foreign key action codes */
@@ -1960,6 +1961,7 @@ typedef struct Constraint
 	char	   *conname;		/* Constraint name, or NULL if unnamed */
 	bool		deferrable;		/* DEFERRABLE? */
 	bool		initdeferred;	/* INITIALLY DEFERRED? */
+	bool		indefdeferred;	/* GPDB: INDEFINATELLY DEFERRED? i.e. no-op*/
 	int			location;		/* token location, or -1 if unknown */
 
 	/* Fields used for constraints with expressions (CHECK and DEFAULT): */
@@ -2692,6 +2694,8 @@ typedef struct FetchStmt
  * index, just a UNIQUE/PKEY constraint using an existing index.  isconstraint
  * must always be true in this case, and the fields describing the index
  * properties are empty.
+ *
+ * GPDB: same logic applies for a no-op constraint
  * ----------------------
  */
 typedef struct IndexStmt
@@ -2715,6 +2719,7 @@ typedef struct IndexStmt
 	bool		isconstraint;	/* is it for a pkey/unique constraint? */
 	bool		deferrable;		/* is the constraint DEFERRABLE? */
 	bool		initdeferred;	/* is the constraint INITIALLY DEFERRED? */
+	bool		indefdeferred;	/* GPDB: is the constraint INDEFINATELLY DEFERRED?  i.e. no-op*/
 	bool		concurrent;		/* should this be a concurrent index build? */
 	bool		is_split_part;	/* Is this for SPLIT PARTITION command? */
 	Oid			parentIndexId;	/* attach to a parent index if set */

@@ -762,6 +762,7 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 			case CONSTR_ATTR_NOT_DEFERRABLE:
 			case CONSTR_ATTR_DEFERRED:
 			case CONSTR_ATTR_IMMEDIATE:
+			case CONSTR_ATTR_INDEFINATE:
 				/* transformConstraintAttrs took care of these */
 				break;
 
@@ -1899,8 +1900,18 @@ transformDistributedBy(CreateStmtContext *cxt,
 			ListCell   *ip;
 			List	   *new_distrkeys = NIL;
 
-			if (constraint->contype != CONSTR_UNIQUE)
+			/*
+			 * XXX: It does make sense to ignore unique constraints however
+			 * there might exist implications that have not been undentified
+			 * yet.
+			 */
+			if (constraint->contype != CONSTR_UNIQUE ||
+					constraint->indefdeferred)
+			{
+				if (constraint->indefdeferred)
+					elog(DEBUG1, "constraint->indefdeferred hit on unique case");
 				continue;
+			}
 
 			if (distrkeys)
 			{
@@ -2314,9 +2325,14 @@ transformDistributedBy(CreateStmtContext *cxt,
 		Constraint *constraint = (Constraint *) lfirst(lc);
 		ListCell   *dk;
 
-		if (constraint->contype != CONSTR_PRIMARY &&
-			constraint->contype != CONSTR_UNIQUE)
+		if ((constraint->contype != CONSTR_PRIMARY &&
+			constraint->contype != CONSTR_UNIQUE) ||
+			constraint->indefdeferred)
+		{
+			if (constraint->contype)
+				elog(DEBUG1, "provide a proper message to the user with hint");
 			continue;
+		}
 
 		foreach(dk, distrkeys)
 		{
@@ -2620,7 +2636,8 @@ transformIndexConstraints(CreateStmtContext *cxt, bool mayDefer)
 				equal(index->excludeOpNames, priorindex->excludeOpNames) &&
 				strcmp(index->accessMethod, priorindex->accessMethod) == 0 &&
 				index->deferrable == priorindex->deferrable &&
-				index->initdeferred == priorindex->initdeferred)
+				index->initdeferred == priorindex->initdeferred &&
+				index->indefdeferred == priorindex->indefdeferred)
 			{
 				priorindex->unique |= index->unique;
 
@@ -2685,16 +2702,36 @@ transformIndexConstraints(CreateStmtContext *cxt, bool mayDefer)
 static IndexStmt *
 transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 {
+	/* XXX: eh??? this seems weird here... take a look */
 	Assert(constraint->contype !=  CONSTR_EXCLUSION);
 
 	IndexStmt  *index;
 	ListCell   *lc;
 
+	/*
+	 * GPDB: IF the constraint is INDEFINATELLY DEFERRED then index creation
+	 * should be informative only... does that mean that we actually have to
+	 * index data? I shouldn't think so...
+	 */
+	if (constraint->indefdeferred)
+	{
+		ereport(NOTICE,
+				(errcode(ERRCODE_SUCCESSFUL_COMPLETION),
+				errmsg("substitute with an appropriate message"),
+				errhint("Only use INDEFINATELLY DEFERRED constraints iff a"
+						" constraint is not required to be enforced.")));
+	}
+
 	index = makeNode(IndexStmt);
 
 	index->unique = (constraint->contype != CONSTR_EXCLUSION);
 	index->primary = (constraint->contype == CONSTR_PRIMARY);
-	if (index->primary)
+	/* 
+	 * XXX: hmm should I really apply on the whole block? It is very possible
+	 * that the cxt->pkey will be needed to be populated and checked later,
+	 * although the tentancles should not stretch to everything.
+	 */
+	if (index->primary && !constraint->indefdeferred)
 	{
 		if (cxt->pkey != NULL)
 			ereport(ERROR,
@@ -2712,6 +2749,7 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 	index->isconstraint = true;
 	index->deferrable = constraint->deferrable;
 	index->initdeferred = constraint->initdeferred;
+	index->indefdeferred = constraint->indefdeferred;
 
 	if (constraint->conname != NULL)
 		index->idxname = pstrdup(constraint->conname);
@@ -2719,6 +2757,9 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 		index->idxname = NULL;	/* DefineIndex will choose name */
 
 	index->relation = cxt->relation;
+	/* XXX: an indefdeferred constraint should not have access method */
+	if (constraint->indefdeferred && constraint->access_method)
+		elog(NOTICE, "Fix this up the stack if seen and remove before PR");
 	index->accessMethod = constraint->access_method ? constraint->access_method : DEFAULT_INDEX_TYPE;
 	index->options = constraint->options;
 	index->tableSpace = constraint->indexspace;
@@ -2738,6 +2779,9 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 	 */
 	if (constraint->indexname != NULL)
 	{
+		if (constraint->indefdeferred)
+			elog(NOTICE, "ALTER TABLE ADD CONSTRAINT USING INDEX case is not IMPLEMENTED YET for indefdeferred");
+
 		char	   *index_name = constraint->indexname;
 		Relation	heap_rel = cxt->rel;
 		Oid			index_oid;
@@ -3821,6 +3865,8 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
  * NOTE: currently, attributes are only supported for FOREIGN KEY, UNIQUE,
  * EXCLUSION, and PRIMARY KEY constraints, but someday they ought to be
  * supported for other constraint types.
+ *
+ * GPDB: Indefinatelly deferred constraints follow the above rules.
  */
 static void
 transformConstraintAttrs(CreateStmtContext *cxt, List *constraintList)
@@ -3921,6 +3967,22 @@ transformConstraintAttrs(CreateStmtContext *cxt, List *constraintList)
 							 parser_errposition(cxt->pstate, con->location)));
 				saw_initially = true;
 				lastprimarycon->initdeferred = false;
+				break;
+
+			case CONSTR_ATTR_INDEFINATE:
+				if (!SUPPORTS_ATTRS(lastprimarycon))
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("misplaced INDEFINATELLY DEFERRED clause"),
+							 parser_errposition(cxt->pstate, con->location)));
+				if (saw_initially || saw_deferrability)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("multiple INITIALLY IMMEDIATE INDEFINATELLY /DEFERRED clauses not allowed"),
+							 parser_errposition(cxt->pstate, con->location)));
+				saw_initially = true;
+				saw_deferrability = true;
+				lastprimarycon->indefdeferred = true;
 				break;
 
 			default:

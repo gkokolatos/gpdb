@@ -997,6 +997,7 @@ _outConstraint(StringInfo str, Constraint *node)
 	WRITE_STRING_FIELD(conname);
 	WRITE_BOOL_FIELD(deferrable);
 	WRITE_BOOL_FIELD(initdeferred);
+	WRITE_BOOL_FIELD(indefdeferred);
 	WRITE_LOCATION_FIELD(location);
 
 	WRITE_ENUM_FIELD(contype,ConstrType);
@@ -1053,6 +1054,7 @@ _outConstraint(StringInfo str, Constraint *node)
 		case CONSTR_ATTR_NOT_DEFERRABLE:
 		case CONSTR_ATTR_DEFERRED:
 		case CONSTR_ATTR_IMMEDIATE:
+		case CONSTR_ATTR_INDEFINATE:
 			break;
 
 		default:

@@ -1957,8 +1957,13 @@ describeOneTableDetails(const char *schemaname,
 			appendPQExpBuffer(&buf, "false AS indisreplident,\n");
 
 		appendPQExpBuffer(&buf, "  a.amname, c2.relname, "
-					  "pg_catalog.pg_get_expr(i.indpred, i.indrelid, true)\n"
-						  "FROM pg_catalog.pg_index i, pg_catalog.pg_class c, pg_catalog.pg_class c2, pg_catalog.pg_am a\n"
+					  "pg_catalog.pg_get_expr(i.indpred, i.indrelid, true)\n");
+		if (pset.sversion >= 90420)
+			appendPQExpBufferStr(&buf, ", i.indisnoop\n");
+		else
+			appendPQExpBufferStr(&buf, ", false as indisnoop\n");
+
+				appendPQExpBuffer(&buf, "FROM pg_catalog.pg_index i, pg_catalog.pg_class c, pg_catalog.pg_class c2, pg_catalog.pg_am a\n"
 		  "WHERE i.indexrelid = c.oid AND c.oid = '%s' AND c.relam = a.oid\n"
 						  "AND i.indrelid = c2.oid;",
 						  oid);
@@ -1983,6 +1988,7 @@ describeOneTableDetails(const char *schemaname,
 			char	   *indamname = PQgetvalue(result, 0, 7);
 			char	   *indtable = PQgetvalue(result, 0, 8);
 			char	   *indpred = PQgetvalue(result, 0, 9);
+			char	   *indisnoop = PQgetvalue(result, 0, 10);
 
 			if (strcmp(indisprimary, "t") == 0)
 				printfPQExpBuffer(&tmpbuf, _("primary key, "));
@@ -2013,6 +2019,9 @@ describeOneTableDetails(const char *schemaname,
 
 			if (strcmp(indisreplident, "t") == 0)
 				appendPQExpBuffer(&tmpbuf, _(", replica identity"));
+
+			if (strcmp(indisnoop, "t") == 0)
+				appendPQExpBufferStr(&tmpbuf, _(", indefinatelly deferred"));
 
 			printTableAddFooter(&cont, tmpbuf.data);
 			add_tablespace_footer(&cont, tableinfo.relkind,
@@ -2376,6 +2385,11 @@ describeOneTableDetails(const char *schemaname,
 				appendPQExpBufferStr(&buf, ", false AS indisreplident");
 			if (pset.sversion >= 80000)
 				appendPQExpBufferStr(&buf, ", c2.reltablespace");
+			if (pset.sversion >= 90420)
+				appendPQExpBufferStr(&buf, ", i.indisnoop");
+			else
+				appendPQExpBufferStr(&buf, ", false as indisnoop");
+
 			appendPQExpBufferStr(&buf,
 								 "\nFROM pg_catalog.pg_class c, pg_catalog.pg_class c2, pg_catalog.pg_index i\n");
 			if (pset.sversion >= 90000)
@@ -2421,6 +2435,10 @@ describeOneTableDetails(const char *schemaname,
 							else
 								appendPQExpBufferStr(&buf, " UNIQUE,");
 						}
+
+						/* GPDB: Indefinatelly deferred */
+						if (strcmp(PQgetvalue(result, i, 12), "t") == 0)
+							appendPQExpBufferStr(&buf, " INDEFINATELLY DEFERRED,");
 
 						/* Everything after "USING" is echoed verbatim */
 						indexdef = PQgetvalue(result, i, 5);

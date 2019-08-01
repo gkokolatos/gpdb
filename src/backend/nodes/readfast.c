@@ -440,10 +440,12 @@ _readConstraint(void)
 	READ_STRING_FIELD(conname);			/* name, or NULL if unnamed */
 	READ_BOOL_FIELD(deferrable);
 	READ_BOOL_FIELD(initdeferred);
+	READ_BOOL_FIELD(indefdeferred);
 	READ_LOCATION_FIELD(location);
 
 	READ_ENUM_FIELD(contype,ConstrType);
-	Assert(local_node->contype <= CONSTR_ATTR_IMMEDIATE);
+	Assert(local_node->contype <= CONSTR_ATTR_IMMEDIATE ||
+			local_node->contype == CONSTR_ATTR_INDEFINATE);
 
 	switch (local_node->contype)
 	{
@@ -497,6 +499,7 @@ _readConstraint(void)
 		case CONSTR_ATTR_NOT_DEFERRABLE:
 		case CONSTR_ATTR_DEFERRED:
 		case CONSTR_ATTR_IMMEDIATE:
+		case CONSTR_ATTR_INDEFINATE:
 		break;
 
 		default:

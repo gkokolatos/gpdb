@@ -3854,6 +3854,7 @@ _copyIndexStmt(const IndexStmt *from)
 	COPY_SCALAR_FIELD(isconstraint);
 	COPY_SCALAR_FIELD(deferrable);
 	COPY_SCALAR_FIELD(initdeferred);
+	COPY_SCALAR_FIELD(indefdeferred);
 	COPY_SCALAR_FIELD(concurrent);
 	COPY_SCALAR_FIELD(is_split_part);
 	COPY_SCALAR_FIELD(parentIndexId);

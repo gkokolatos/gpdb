@@ -729,7 +729,8 @@ DefineIndex(Oid relationId,
 	if (stmt->primary)
 		index_check_primary_key(rel, indexInfo, is_alter_table);
 
-	if ((stmt->primary || stmt->unique) && rel->rd_cdbpolicy)
+	if ((stmt->primary || stmt->unique) &&
+			rel->rd_cdbpolicy && !stmt->indefdeferred)
 		checkPolicyForUniqueIndex(rel,
 								  indexInfo->ii_KeyAttrNumbers,
 								  indexInfo->ii_NumIndexAttrs,
@@ -816,7 +817,7 @@ DefineIndex(Oid relationId,
 					 stmt->isconstraint, stmt->deferrable, stmt->initdeferred,
 					 allowSystemTableMods,
 					 skip_build || stmt->concurrent,
-					 stmt->concurrent, !check_rights,
+					 stmt->concurrent, !check_rights, stmt->indefdeferred,
 					 &createdConstraintId);
 
 	if (shouldDispatch)

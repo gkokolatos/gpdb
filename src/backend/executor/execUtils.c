@@ -1195,6 +1195,10 @@ ExecInsertIndexTuples(TupleTableSlot *slot,
 		else
 			checkUnique = UNIQUE_CHECK_PARTIAL;
 
+		/* GPDB: Override for noop */
+		if (indexRelation->rd_index->indisnoop)
+			checkUnique = UNIQUE_CHECK_NO;
+
 		satisfiesConstraint =
 			index_insert(indexRelation, /* index relation */
 						 values,	/* array of index Datums */

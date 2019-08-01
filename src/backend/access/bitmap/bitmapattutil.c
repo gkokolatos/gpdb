@@ -255,6 +255,7 @@ _bitmap_create_lov_heapandindex(Relation rel,
 						 /* skip_build */ false,
 						 /* concurrent */ false,
 						 /* is_internal */ true,
+						 /* isindefderred */ false,
 						 NULL);
 	*lovIndexOid = idxid;
 

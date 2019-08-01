@@ -115,7 +115,8 @@ static void UpdateIndexRelation(Oid indexoid, Oid heapoid,
 					bool primary,
 					bool isexclusion,
 					bool immediate,
-					bool isvalid);
+					bool isvalid,
+					bool isindefdeferred);
 static void index_update_stats(Relation rel,
 				   bool hasindex, bool isprimary,
 				   double reltuples);
@@ -614,7 +615,8 @@ UpdateIndexRelation(Oid indexoid,
 					bool primary,
 					bool isexclusion,
 					bool immediate,
-					bool isvalid)
+					bool isvalid,
+					bool isindefdeferred)
 {
 	int2vector *indkey;
 	oidvector  *indcollation;
@@ -702,6 +704,7 @@ UpdateIndexRelation(Oid indexoid,
 	values[Anum_pg_index_indpred - 1] = predDatum;
 	if (predDatum == (Datum) 0)
 		nulls[Anum_pg_index_indpred - 1] = true;
+	values[Anum_pg_index_indisnoop - 1] = BoolGetDatum(isindefdeferred);
 
 	tuple = heap_form_tuple(RelationGetDescr(pg_index), values, nulls);
 
@@ -751,6 +754,8 @@ UpdateIndexRelation(Oid indexoid,
  *		to fix it up.
  * is_internal: if true, post creation hook for new index
  *
+ * GPDB: isindefdeferred: if true then the associated constraint is a noop
+ *
  * Returns the OID of the created index.
  */
 Oid
@@ -776,6 +781,7 @@ index_create(Relation heapRelation,
 			 bool skip_build,
 			 bool concurrent,
 			 bool is_internal,
+			 bool isindefdeferred,
 			 Oid *constraintId)
 {
 	Oid			heapRelationId = RelationGetRelid(heapRelation);
@@ -995,7 +1001,8 @@ index_create(Relation heapRelation,
 						collationObjectId, classObjectId, coloptions,
 						isprimary, is_exclusion,
 						!deferrable,
-						!concurrent);
+						!concurrent,
+						isindefdeferred);
 
 	/*
 	 * Register relcache invalidation on the indexes' heap relation, to

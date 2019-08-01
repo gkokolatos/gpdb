@@ -1,0 +1,78 @@
+DROP TABLE IF EXISTS noop_test CASCADE;
+CREATE TABLE noop_test (a integer,
+					b integer UNIQUE INDEFINATELLY DEFERRED,
+					c integer UNIQUE INDEFINATELLY DEFERRED)
+DISTRIBUTED BY (a);
+NOTICE:  substitute with an appropriate message
+HINT:  Only use INDEFINATELLY DEFERRED constraints iff a constraint is not required to be enforced.
+NOTICE:  substitute with an appropriate message
+HINT:  Only use INDEFINATELLY DEFERRED constraints iff a constraint is not required to be enforced.
+\d noop_test
+   Table "public.noop_test"
+ Column |  Type   | Modifiers 
+--------+---------+-----------
+ a      | integer | 
+ b      | integer | 
+ c      | integer | 
+Indexes:
+    "noop_test_b_key" UNIQUE CONSTRAINT, INDEFINATELLY DEFERRED, btree (b)
+    "noop_test_c_key" UNIQUE CONSTRAINT, INDEFINATELLY DEFERRED, btree (c)
+Distributed by: (a)
+
+\d noop_test_b_key
+Index "public.noop_test_b_key"
+ Column |  Type   | Definition 
+--------+---------+------------
+ b      | integer | b
+unique, btree, for table "public.noop_test", indefinatelly deferred
+
+SELECT
+	c2.relname,
+	i.indisprimary,
+	i.indisunique,
+	i.indisclustered,
+	i.indisvalid,
+	i.indisnoop,
+	pg_catalog.pg_get_indexdef(i.indexrelid, 0, true),
+	pg_catalog.pg_get_constraintdef(con.oid, true),
+	contype,
+	condeferrable,
+	condeferred,
+	i.indisreplident,
+	c2.reltablespace
+FROM
+	pg_catalog.pg_class c,
+	pg_catalog.pg_class c2,
+	pg_catalog.pg_index i   LEFT JOIN
+	pg_catalog.pg_constraint con
+ON
+(
+	conrelid = i.indrelid AND
+	conindid = i.indexrelid AND
+	contype IN ('p','u','x')
+)
+WHERE
+	(c2.relname = 'noop_test_b_key' OR
+	c2.relname = 'noop_test_c_key') AND
+	c.oid = i.indrelid AND
+	i.indexrelid = c2.oid
+ORDER BY
+	i.indisprimary DESC,
+	i.indisunique DESC,
+	c2.relname
+;
+     relname     | indisprimary | indisunique | indisclustered | indisvalid | indisnoop |                         pg_get_indexdef                          | pg_get_constraintdef | contype | condeferrable | condeferred | indisreplident | reltablespace 
+-----------------+--------------+-------------+----------------+------------+-----------+------------------------------------------------------------------+----------------------+---------+---------------+-------------+----------------+---------------
+ noop_test_b_key | f            | t           | f              | t          | t         | CREATE UNIQUE INDEX noop_test_b_key ON noop_test USING btree (b) | UNIQUE (b)           | u       | f             | f           | f              |             0
+ noop_test_c_key | f            | t           | f              | t          | t         | CREATE UNIQUE INDEX noop_test_c_key ON noop_test USING btree (c) | UNIQUE (c)           | u       | f             | f           | f              |             0
+(2 rows)
+
+INSERT INTO noop_test (a, b, c) SELECT generate_series(0, 9) as a, 1 as b, 2 as c;
+SELECT gp_segment_id, count(b) as "b multiples", count(c) as "c multiples", b, c FROM noop_test GROUP BY 1, b, c;
+ gp_segment_id | b multiples | c multiples | b | c 
+---------------+-------------+-------------+---+---
+             0 |           5 |           5 | 1 | 2
+             1 |           2 |           2 | 1 | 2
+             2 |           3 |           3 | 1 | 2
+(3 rows)
+

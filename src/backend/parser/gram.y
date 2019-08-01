@@ -645,6 +645,8 @@ static Node *makeIsNotDistinctFromNode(Node *expr, int position);
 	INNER_P INOUT INPUT_P INSENSITIVE INSERT INSTEAD INT_P INTEGER
 	INTERSECT INTERVAL INTO INVOKER IS ISNULL ISOLATION
 
+	INDEFINATELLY
+
 	JOIN
 
 	KEY
@@ -4479,6 +4481,13 @@ ConstraintAttr:
 				{
 					Constraint *n = makeNode(Constraint);
 					n->contype = CONSTR_ATTR_IMMEDIATE;
+					n->location = @1;
+					$$ = (Node *)n;
+				}
+			| INDEFINATELLY DEFERRED
+				{
+					Constraint *n = makeNode(Constraint);
+					n->contype = CONSTR_ATTR_INDEFINATE;
 					n->location = @1;
 					$$ = (Node *)n;
 				}
@@ -16311,6 +16320,7 @@ reserved_keyword:
 			| GROUP_P
 			| HAVING
 			| IN_P
+			| INDEFINATELLY
 			| INITIALLY
 			| INTERSECT
 			| INTO
