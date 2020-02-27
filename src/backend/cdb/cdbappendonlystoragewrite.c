@@ -277,6 +277,119 @@ AppendOnlyStorageWrite_TransactionCreateFile(AppendOnlyStorageWrite *storageWrit
 		xlog_ao_insert(relFileNode->node, segmentFileNum, 0, NULL, 0);
 }
 
+
+/*
+ * Opens the next segment file to write.  The file must already exist.
+ *
+ * This routine is responsible for seeking to the proper write location given
+ * the logical EOF.
+ *
+ * filePathName		- name of the segment file to open.
+ * version			- AO table format version the file is in.
+ * logicalEof		- last committed write transaction's EOF value to use as
+ *					  the end of the segment file.
+ */
+void
+MY_AppendOnlyStorageWrite_OpenFile(AppendOnlyStorageWrite *storageWrite,
+								char *filePathName,
+								int version,
+								int64 logicalEof,
+								int64 fileLen_uncompressed,
+								RelFileNodeBackend *relFileNode,
+								int32 segmentFileNum)
+{
+	File		file;
+	int64		seekResult;
+	MemoryContext oldMemoryContext;
+
+	Assert(storageWrite != NULL);
+	Assert(storageWrite->isActive);
+
+	Assert(filePathName != NULL);
+
+	/*
+	 * Assume that we only write in the current latest format. (it's redundant
+	 * to pass the version number as argument, currently)
+	 */
+	if (version != AORelationVersion_GetLatest())
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("cannot write append-only table version %d", version)));
+
+	/*
+	 * Open or create the file for write.
+	 */
+	char	   *path = pstrdup(filePathName);
+
+	errno = 0;
+
+	int			fileFlags = O_RDWR | PG_BINARY;
+	file = PathNameOpenFile(path, fileFlags, 0600);
+	if (file < 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("Append-only Storage Write could not open segment file %s \"%s\" for relation \"%s\": %m",
+						path, filePathName,
+						storageWrite->relationName)));
+
+	elog(NOTICE, "Is using %s", path);
+	/*
+	 * Seek to the logical EOF write position.
+	 */
+	seekResult = FileSeek(file, logicalEof, SEEK_SET);
+	if (seekResult != logicalEof)
+	{
+		FileClose(file);
+
+		ereport(ERROR,
+				(errcode(ERRCODE_IO_ERROR),
+				 errmsg("Append-only Storage Write error on segment file '%s' for relation '%s'.  FileSeek offset = " INT64_FORMAT ".  Error code = %d (%s)",
+						filePathName,
+						storageWrite->relationName,
+						logicalEof,
+						(int) seekResult,
+						strerror((int) seekResult))));
+	}
+
+	storageWrite->file = file;
+	storageWrite->formatVersion = version;
+	storageWrite->startEof = logicalEof;
+	storageWrite->relFileNode = *relFileNode;
+	storageWrite->segmentFileNum = segmentFileNum;
+
+	/*
+	 * When writing multiple segment files, we throw away the old segment file
+	 * name strings.
+	 */
+	oldMemoryContext = MemoryContextSwitchTo(storageWrite->memoryContext);
+
+	if (storageWrite->segmentFileName != NULL)
+		pfree(storageWrite->segmentFileName);
+
+	storageWrite->segmentFileName = pstrdup(filePathName);
+
+	/* Allocation is done.  Go back to caller memory-context. */
+	MemoryContextSwitchTo(oldMemoryContext);
+
+	/*
+	 * Tell the BufferedAppend module about the file we just opened.
+	 */
+	BufferedAppendSetFile(&storageWrite->bufferedAppend,
+						  storageWrite->file,
+						  storageWrite->relFileNode,
+						  storageWrite->segmentFileNum,
+						  storageWrite->segmentFileName,
+						  logicalEof,
+						  fileLen_uncompressed);
+}
+
+
+
+
+
+
+
+
 /*
  * Opens the next segment file to write.  The file must already exist.
  *

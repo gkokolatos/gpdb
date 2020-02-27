@@ -114,6 +114,7 @@ gp_aovisimap_hidden_info_wrapper(PG_FUNCTION_ARGS);
  *                 , tupcount bigint
  *                 , eof bigint
  *                 , eof_uncompressed bigint
+ *                 , column_version bigint
  *                 , state smallint
  *                 )
  *   AS '$libdir/gp_ao_co_diagnostics', 'gp_aoseg_history_wrapper' LANGUAGE C STRICT;
@@ -143,6 +144,7 @@ gp_aoseg_history_wrapper(PG_FUNCTION_ARGS)
  *                 , tupcount bigint
  *                 , eof bigint
  *                 , eof_uncompressed bigint
+ *                 , column_version bigint
  *                 , modcount bigint
  *                 , state smallint
  *                 )
@@ -171,6 +173,7 @@ gp_aocsseg_wrapper(PG_FUNCTION_ARGS)
  *                 , tupcount bigint
  *                 , varblockcount bigint
  *                 , eof_uncompressed bigint
+ *                 , column_version bigint
  *                 , modcount bigint
  *                 , state smallint
  *                 )
@@ -210,6 +213,7 @@ gp_aoseg_wrapper(PG_FUNCTION_ARGS)
  *                 , tupcount bigint
  *                 , eof bigint
  *                 , eof_uncompressed bigint
+ *                 , column_version bigint
  *                 , state smallint
  *                 )
  *   AS '$libdir/gp_ao_co_diagnostics', 'gp_aocsseg_history_wrapper' LANGUAGE C STRICT;

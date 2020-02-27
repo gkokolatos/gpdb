@@ -266,4 +266,14 @@ extern void aocs_addcol_emptyvpe(
 		int32 nseg, int num_newcols);
 extern void aocs_addcol_setfirstrownum(AOCSAddColumnDesc desc,
 		int64 firstRowNum);
+
+extern AOCSAddColumnDesc aocs_altercol_init(Relation rel, bool *proj);
+extern void aocs_altercol_finish(AOCSAddColumnDesc);
+extern void aocs_altercol_newsegfile(AOCSAddColumnDesc desc,
+						AOCSFileSegInfo *seginfo,
+						char *basepath,
+						RelFileNodeBackend relfilenode);
+
+extern void aocs_altercol_insert_datum(AOCSAddColumnDesc desc, Datum *d, bool *isnull);
+
 #endif   /* AOCSAM_H */

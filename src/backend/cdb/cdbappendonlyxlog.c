@@ -122,6 +122,7 @@ ao_insert_replay(XLogReaderState *record)
  */
 void xlog_ao_truncate(RelFileNode relFileNode, int32 segmentFileNum, int64 offset)
 {
+	/* XXX: THIS NEEDS TO BE UPDATED */
 	xl_ao_truncate	xlaotruncate;
 
 	xlaotruncate.target.node = relFileNode;

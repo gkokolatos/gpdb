@@ -56,6 +56,8 @@ static AOCSScanDesc aocs_beginscan_internal(Relation relation,
 						Snapshot appendOnlyMetaDataSnapshot,
 						TupleDesc relationTupleDesc, bool *proj);
 
+static void aocs_altercol_closefiles(AOCSAddColumnDesc desc);
+
 /*
  * Open the segment file for a specified column associated with the datum
  * stream.
@@ -73,7 +75,7 @@ open_datumstreamread_segfile(
 
 	AOCSVPInfoEntry *e = getAOCSVPEntry(segInfo, colNo);
 
-	FormatAOSegmentFileName(basepath, segNo, colNo, &fileSegNo, fn);
+	FormatAOSegmentFileName(basepath, segNo, colNo, e->column_version, &fileSegNo, fn);
 	Assert(strlen(fn) + 1 <= MAXPGPATH);
 
 	Assert(ds);
@@ -790,7 +792,7 @@ OpenAOCSDatumStreams(AOCSInsertDesc desc)
 	{
 		AOCSVPInfoEntry *e = getAOCSVPEntry(seginfo, i);
 
-		FormatAOSegmentFileName(basepath, seginfo->segno, i, &fileSegNo, fn);
+		FormatAOSegmentFileName(basepath, seginfo->segno, i, e->column_version, &fileSegNo, fn);
 		Assert(strlen(fn) + 1 <= MAXPGPATH);
 
 		datumstreamwrite_open_file(desc->ds[i], fn, e->eof, e->eof_uncompressed,
@@ -1757,10 +1759,10 @@ aocs_headerscan_opensegfile(AOCSHeaderScanDesc hdesc,
 
 	/* Close currently open segfile, if any. */
 	AppendOnlyStorageRead_CloseFile(&hdesc->ao_read);
-	FormatAOSegmentFileName(basepath, seginfo->segno,
-							hdesc->colno, &fileSegNo, fn);
-	Assert(strlen(fn) + 1 <= MAXPGPATH);
 	vpe = getAOCSVPEntry(seginfo, hdesc->colno);
+	FormatAOSegmentFileName(basepath, seginfo->segno,
+							hdesc->colno, vpe->column_version, &fileSegNo, fn);
+	Assert(strlen(fn) + 1 <= MAXPGPATH);
 	AppendOnlyStorageRead_OpenFile(&hdesc->ao_read, fn, seginfo->formatversion,
 								   vpe->eof);
 }
@@ -1866,7 +1868,8 @@ aocs_addcol_newsegfile(AOCSAddColumnDesc desc,
 		/* Always write in the latest format */
 		version = AORelationVersion_GetLatest();
 
-		FormatAOSegmentFileName(basepath, seginfo->segno, colno,
+		/* Always start at a version 0 for new columns */
+		FormatAOSegmentFileName(basepath, seginfo->segno, colno, 0,
 								&fileSegNo, fn);
 		Assert(strlen(fn) + 1 <= MAXPGPATH);
 		datumstreamwrite_open_file(desc->dsw[i], fn,
@@ -2040,3 +2043,218 @@ aocs_addcol_emptyvpe(Relation rel,
 		}
 	}
 }
+
+/*
+ * Initialize one datum stream per column altered.
+ */
+AOCSAddColumnDesc
+aocs_altercol_init(Relation rel, bool *proj)
+{
+	AOCSAddColumnDesc desc;
+	char	   *ct;
+	int32		clvl;
+	int32		blksz;
+	int			i;
+	int			num_ds;
+	StringInfoData titleBuf;
+
+	desc = palloc0(sizeof(*desc));
+	desc->num_newcols = 0;
+	desc->rel = rel;
+	desc->cur_segno = -1;
+
+	/*
+	 * Rewrite catalog phase of alter table has updated catalog with info for
+	 * new columns, which is available through rel.
+	 */
+	StdRdOptions **opts = RelationGetAttributeOptions(rel);
+	desc->dsw = palloc0(sizeof(*desc->dsw) * RelationGetDescr(rel)->natts);
+	for (i = 0, num_ds = 0; i < RelationGetDescr(rel)->natts; i++)
+	{
+		Form_pg_attribute attr;
+
+		if (!proj[i])
+			continue;
+
+		num_ds++;
+		attr = rel->rd_att->attrs[i];
+		
+		initStringInfo(&titleBuf);
+		appendStringInfo(&titleBuf, "ALTER TABLE ALTER COLUMN new segfile");
+
+		Assert(opts[i]);
+		ct = opts[i]->compresstype;
+		clvl = opts[i]->compresslevel;
+		blksz = opts[i]->blocksize;
+		desc->dsw[i] = create_datumstreamwrite(ct, clvl, rel->rd_appendonly->checksum, 0, blksz /* safeFSWriteSize */ ,
+											   attr, RelationGetRelationName(rel),
+											   titleBuf.data,
+											   RelationNeedsWAL(rel));
+	}
+
+	desc->num_newcols = num_ds; /* XXX: Overtaking this */
+	return desc;
+}
+
+/*
+ * Insert one new datum for each column being altered.
+ */
+void
+aocs_altercol_insert_datum(AOCSAddColumnDesc desc, Datum *d, bool *isnull)
+{
+	void	   *toFree1;
+	void	   *toFree2;
+	Datum		datum;
+	int			err;
+	int			i;
+	int			itemCount;
+
+	for (i = 0; i < RelationGetDescr(desc->rel)->natts; i++)
+	{
+		if (desc->dsw[i] == NULL)
+			continue;
+
+		datum = d[i];
+		err = datumstreamwrite_put(desc->dsw[i], datum, isnull[i], &toFree1);
+		if (toFree1 != NULL)
+		{
+			/*
+			 * Use the de-toasted and/or de-compressed as datum instead.
+			 */
+			datum = PointerGetDatum(toFree1);
+		}
+		if (err < 0)
+		{
+			/*
+			 * We have reached max number of datums that can be accommodated
+			 * in current varblock.
+			 */
+			itemCount = datumstreamwrite_nth(desc->dsw[i]);
+			/* write the block up to this one */
+			datumstreamwrite_block(desc->dsw[i], &desc->blockDirectory, i, true);
+			if (itemCount > 0)
+			{
+				/* Next block's first row number */
+				desc->dsw[i]->blockFirstRowNum += itemCount;
+			}
+
+			/* now write this new item to the new block */
+			err = datumstreamwrite_put(desc->dsw[i], datum, isnull[i], &toFree2);
+			Assert(toFree2 == NULL);
+			if (err < 0)
+			{
+				Assert(!isnull[i]);
+				err = datumstreamwrite_lob(desc->dsw[i],
+										   datum,
+										   &desc->blockDirectory,
+										   i,
+										   true);
+				Assert(err >= 0);
+
+				/*
+				 * Have written the block above with column value
+				 * corresponding to a row, so now update the first row number
+				 * to correctly reflect for next block.
+				 */
+				desc->dsw[i]->blockFirstRowNum++;
+			}
+		}
+		if (toFree1 != NULL)
+			pfree(toFree1);
+	}
+}
+
+static void
+aocs_altercol_closefiles(AOCSAddColumnDesc desc)
+{
+
+	int *columnNum = palloc0(RelationGetDescr(desc->rel)->natts * sizeof(*columnNum));
+	int sz = 0;		
+	for (int i = 0; i < RelationGetDescr(desc->rel)->natts; i++)
+	{
+		if (desc->dsw[i] == NULL)
+			continue;
+
+		datumstreamwrite_block(desc->dsw[i], &desc->blockDirectory, i, true);
+		datumstreamwrite_close_file(desc->dsw[i]);
+		columnNum[sz++] = i;
+	}
+	for (int i = 0; i < sz; i++)
+		AOCSFileSegInfoUpdateColumnVersion(desc->rel, desc->cur_segno, columnNum[i]);
+}
+
+/*
+ * Create new physical segfiles for each altered column.
+ */
+void
+aocs_altercol_newsegfile(AOCSAddColumnDesc desc,
+					   AOCSFileSegInfo *seginfo,
+					   char *basepath,
+					   RelFileNodeBackend relfilenode)
+{
+	int32		fileSegNo;
+	char		fn[MAXPGPATH];
+	int			i;
+	Snapshot	appendOnlyMetaDataSnapshot = RegisterSnapshot(GetCatalogSnapshot(InvalidOid));
+
+	for (i = 0; i < RelationGetDescr(desc->rel)->natts; i++)
+	{
+		if (desc->dsw[i] == NULL)
+			continue;
+
+		if (desc->dsw[i]->need_close_file)
+		{
+			aocs_altercol_closefiles(desc);
+			AppendOnlyBlockDirectory_End_addCol(&desc->blockDirectory);
+			break;
+		}
+	}
+
+	AppendOnlyBlockDirectory_Init_addCol(&desc->blockDirectory,
+										 appendOnlyMetaDataSnapshot,
+										 (FileSegInfo *) seginfo,
+										 desc->rel,
+										 seginfo->segno,
+										 desc->num_newcols, /* XXX: Num of altered columns */
+										 true /* isAOCol */ );
+
+	for (i = 0; i < RelationGetDescr(desc->rel)->natts; i++)
+	{
+		if (desc->dsw[i] == NULL)
+			continue;
+
+		int			version;
+
+		/* Always write in the latest format */
+		version = AORelationVersion_GetLatest();
+		/* We need to take the current version and increment it */
+
+		FormatAOSegmentFileName(basepath, seginfo->segno, i, seginfo->vpinfo.entry[i].column_version +1, &fileSegNo, fn);
+		elog(NOTICE, "will write to %s", fn);
+		Assert(strlen(fn) + 1 <= MAXPGPATH);
+
+		datumstreamwrite_ALTER_AOCS_open_file(desc->dsw[i], fn,
+								   0 /* eof */ , 0 /* eof_uncompressed */ ,
+								   &relfilenode, fileSegNo,
+								   version);
+		desc->dsw[i]->blockFirstRowNum = 1;
+	}
+	desc->cur_segno = seginfo->segno;
+	UnregisterSnapshot(appendOnlyMetaDataSnapshot);
+}
+
+void
+aocs_altercol_finish(AOCSAddColumnDesc desc)
+{
+	aocs_altercol_closefiles(desc);
+	AppendOnlyBlockDirectory_End_addCol(&desc->blockDirectory);
+	for (int i = 0; i < RelationGetDescr(desc->rel)->natts; i++)
+	{
+		if (desc->dsw[i])
+			destroy_datumstreamwrite(desc->dsw[i]);
+	}
+	pfree(desc->dsw);
+
+	pfree(desc);
+}
+

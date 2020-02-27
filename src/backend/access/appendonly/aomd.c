@@ -69,6 +69,7 @@ void
 FormatAOSegmentFileName(char *basepath,
 						int segno,
 						int col,
+						int columnVersion,
 						int32 *fileSegNo,
 						char *filepathname)
 {
@@ -82,7 +83,8 @@ FormatAOSegmentFileName(char *basepath,
 		/*
 		 * Row oriented Append-Only.
 		 */
-		pseudoSegNo = segno;		
+		pseudoSegNo = segno;
+		Assert(columnVersion == 0);
 	}
 	else
 	{
@@ -96,7 +98,10 @@ FormatAOSegmentFileName(char *basepath,
 
 	if (pseudoSegNo > 0)
 	{
-		sprintf(filepathname, "%s.%u", basepath, pseudoSegNo);
+		if (col > 0 && columnVersion > 0)
+			sprintf(filepathname, "%s.%u.%d", basepath, pseudoSegNo, columnVersion);
+		else
+			sprintf(filepathname, "%s.%u", basepath, pseudoSegNo);
 	}
 	else
 		strcpy(filepathname, basepath);
@@ -111,6 +116,7 @@ void
 MakeAOSegmentFileName(Relation rel,
 					  int segno,
 					  int col,
+					  int columnVersion,
 					  int32 *fileSegNo,
 					  char *filepathname)
 {
@@ -120,7 +126,7 @@ MakeAOSegmentFileName(Relation rel,
 	/* Get base path for this relation file */
 	basepath = relpathbackend(rel->rd_node, rel->rd_backend, MAIN_FORKNUM);
 
-	FormatAOSegmentFileName(basepath, segno, col, &fileSegNoLocal, filepathname);
+	FormatAOSegmentFileName(basepath, segno, col, columnVersion, &fileSegNoLocal, filepathname);
 	
 	*fileSegNo = fileSegNoLocal;
 	
@@ -139,20 +145,13 @@ OpenAOSegmentFile(Relation rel,
 				  int32	segmentFileNum,
 				  int64	logicalEof)
 {	
-	char	   *dbPath;
 	char		path[MAXPGPATH];
 	int			fileFlags = O_RDWR | PG_BINARY;
 	File		fd;
 
-	dbPath = GetDatabasePath(rel->rd_node.dbNode, rel->rd_node.spcNode);
-
-	if (segmentFileNum == 0)
-		snprintf(path, MAXPGPATH, "%s/%u", dbPath, rel->rd_node.relNode);
-	else
-		snprintf(path, MAXPGPATH, "%s/%u.%u", dbPath, rel->rd_node.relNode, segmentFileNum);
+	snprintf(path, sizeof(path), "%s", filepathname);
 
 	errno = 0;
-
 	fd = PathNameOpenFile(path, fileFlags, 0600);
 	if (fd < 0)
 	{
@@ -164,7 +163,6 @@ OpenAOSegmentFile(Relation rel,
 				 errmsg("could not open Append-Only segment file \"%s\": %m",
 						filepathname)));
 	}
-	pfree(dbPath);
 
 	return fd;
 }

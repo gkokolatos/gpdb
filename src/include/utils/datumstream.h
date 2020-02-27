@@ -324,4 +324,9 @@ extern void *datumstreamread_get_upgrade_space(DatumStreamRead *datumStream,
  */
 extern void datumstreamread_block_content(DatumStreamRead * acc);
 
+extern void
+datumstreamwrite_ALTER_AOCS_open_file(DatumStreamWrite *ds, char *fn, int64 eof, int64 eofUncompressed,
+						   RelFileNodeBackend *relFileNode, int32 segmentFileNum, int version);
+
+
 #endif   /* DATUMSTREAM_H */

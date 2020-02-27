@@ -50,6 +50,7 @@
  */
 static void
 AOCSCompaction_DropSegmentFile(Relation aorel,
+							   AOCSFileSegInfo *fsinfo,
 							   int segno)
 {
 	int			col;
@@ -61,9 +62,13 @@ AOCSCompaction_DropSegmentFile(Relation aorel,
 		char		filenamepath[MAXPGPATH];
 		int			pseudoSegNo;
 		File		fd;
+		AOCSVPInfoEntry *entry;
 
+		Assert(col <= fsinfo->vpinfo.nEntry);
+		entry = getAOCSVPEntry(fsinfo, col);
+		
 		/* Open and truncate the relation segfile */
-		MakeAOSegmentFileName(aorel, segno, col, &pseudoSegNo, filenamepath);
+		MakeAOSegmentFileName(aorel, segno, col, entry->column_version, &pseudoSegNo, filenamepath);
 
 		elogif(Debug_appendonly_print_compaction, LOG,
 			   "Drop segment file: "
@@ -120,7 +125,7 @@ AOCSSegmentFileTruncateToEOF(Relation aorel,
 		segeof = entry->eof;
 
 		/* Open and truncate the relation segfile to its eof */
-		MakeAOSegmentFileName(aorel, segno, j, &fileSegNo, filenamepath);
+		MakeAOSegmentFileName(aorel, segno, j, entry->column_version, &fileSegNo, filenamepath);
 
 		elogif(Debug_appendonly_print_compaction, LOG,
 			   "Opening AO COL relation \"%s.%s\", relation id %u, relfilenode %u column #%d, logical segment #%d (physical segment file #%d, logical EOF " INT64_FORMAT ")",
@@ -140,12 +145,13 @@ AOCSSegmentFileTruncateToEOF(Relation aorel,
 			CloseAOSegmentFile(fd);
 
 			elogif(Debug_appendonly_print_compaction, LOG,
-				   "Successfully truncated AO COL relation \"%s.%s\", relation id %u, relfilenode %u column #%d, logical segment #%d (physical segment file #%d, logical EOF " INT64_FORMAT ")",
+				   "Successfully truncated AO COL relation \"%s.%s\", relation id %u, relfilenode %u column #%d, version #" INT64_FORMAT ", logical segment #%d (physical segment file #%d, logical EOF " INT64_FORMAT ")",
 				   get_namespace_name(RelationGetNamespace(aorel)),
 				   relname,
 				   aorel->rd_id,
 				   aorel->rd_node.relNode,
 				   j,
+				   entry->column_version,
 				   segno,
 				   fileSegNo,
 				   segeof);
@@ -153,12 +159,13 @@ AOCSSegmentFileTruncateToEOF(Relation aorel,
 		else
 		{
 			elogif(Debug_appendonly_print_compaction, LOG,
-				   "No gp_relation_node entry for AO COL relation \"%s.%s\", relation id %u, relfilenode %u column #%d, logical segment #%d (physical segment file #%d, logical EOF " INT64_FORMAT ")",
+				   "No gp_relation_node entry for AO COL relation \"%s.%s\", relation id %u, relfilenode %u column #%d, version #" INT64_FORMAT " logical segment #%d (physical segment file #%d, logical EOF " INT64_FORMAT ")",
 				   get_namespace_name(RelationGetNamespace(aorel)),
 				   relname,
 				   aorel->rd_id,
 				   aorel->rd_node.relNode,
 				   j,
+				   entry->column_version,
 				   segno,
 				   fileSegNo,
 				   segeof);
@@ -476,7 +483,7 @@ AOCSDrop(Relation aorel,
 		if (fsinfo->state == AOSEG_STATE_AWAITING_DROP)
 		{
 			Assert(HasLockForSegmentFileDrop(aorel));
-			AOCSCompaction_DropSegmentFile(aorel, segno);
+			AOCSCompaction_DropSegmentFile(aorel, fsinfo, segno);
 			ClearAOCSFileSegInfo(aorel, segno, AOSEG_STATE_DEFAULT);
 		}
 		pfree(fsinfo);

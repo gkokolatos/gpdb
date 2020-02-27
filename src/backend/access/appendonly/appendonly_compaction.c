@@ -70,7 +70,8 @@ AppendOnlyCompaction_DropSegmentFile(Relation aorel, int segno)
 		   "Drop segment file: segno %d", segno);
 
 	/* Open and truncate the relation segfile */
-	MakeAOSegmentFileName(aorel, segno, -1, &fileSegNo, filenamepath);
+	/* XXX: Get the info */
+	MakeAOSegmentFileName(aorel, segno, -1, 0, &fileSegNo, filenamepath);
 
 	fd = OpenAOSegmentFile(aorel, filenamepath, fileSegNo, 0);
 	if (fd >= 0)
@@ -227,7 +228,8 @@ AppendOnlySegmentFileTruncateToEOF(Relation aorel,
 	segeof = (int64) fsinfo->eof;
 
 	/* Open and truncate the relation segfile to its eof */
-	MakeAOSegmentFileName(aorel, segno, -1, &fileSegNo, filenamepath);
+	/* XXX: Get the info */
+	MakeAOSegmentFileName(aorel, segno, -1, 0, &fileSegNo, filenamepath);
 
 	elogif(Debug_appendonly_print_compaction, LOG,
 		   "Opening AO relation \"%s.%s\", relation id %u, relfilenode %u (physical segment file #%d, logical EOF " INT64_FORMAT ")",

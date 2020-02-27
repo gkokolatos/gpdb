@@ -360,6 +360,7 @@ static void ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockm
 static void ATAocsWriteNewColumns(
 		AOCSAddColumnDesc idesc, AOCSHeaderScanDesc sdesc,
 		AlteredTableInfo *tab, ExprContext *econtext, TupleTableSlot *slot);
+static bool ATAocsNoRewriteAlterColumnType(AlteredTableInfo *tab);
 static bool ATAocsNoRewrite(AlteredTableInfo *tab);
 static AlteredTableInfo *ATGetQueueEntry(List **wqueue, Relation rel);
 static void ATSimplePermissions(Relation rel, int allowed_targets);
@@ -5777,6 +5778,8 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode)
 			}
 			if (canOptimize && ATAocsNoRewrite(tab))
 				continue;
+			if (!canOptimize && ATAocsNoRewriteAlterColumnType(tab))
+				continue;
 		}
 		/*
 		 * We only need to rewrite the table if at least one column needs to
@@ -6112,6 +6115,154 @@ column_to_scan(AOCSFileSegInfo **segInfos, int nseg, int natts, Relation aocsrel
 		AOCSDrop(aocsrel, drop_segno_list);
 
 	return scancol;
+}
+
+static bool
+ATAocsNoRewriteAlterColumnType(AlteredTableInfo *tab)
+{
+	List *alterColumnCmds;
+	Relation rel;
+	AOCSFileSegInfo **segInfos;
+	EState			 *estate;
+	bool *proj;
+	Snapshot snapshot;
+	int32 nseg;
+
+	if (!tab->subcmds[AT_PASS_ALTER_TYPE])
+		return false;
+
+	for (int i = 0; i < AT_NUM_PASSES; i++)
+	{
+		if (i != AT_PASS_ALTER_TYPE && tab->subcmds[i])
+			return false;
+	}
+
+	if (tab->dist_opfamily_changed || tab->new_opclass)
+		return false;
+
+	if (tab->rewrite == 0)
+		return false;
+
+	/* XXX: check tab for requires rewrite flag, if it does not, return false */
+	alterColumnCmds = tab->subcmds[AT_PASS_ALTER_TYPE];
+	Assert(alterColumnCmds);
+
+	proj = palloc0(tab->oldDesc->natts * sizeof(*proj));
+	rel = heap_open(tab->relid, NoLock);
+	snapshot = RegisterSnapshot(GetCatalogSnapshot(InvalidOid));
+	segInfos = GetAllAOCSFileSegInfo(rel, snapshot, &nseg);
+
+	if (Gp_role == GP_ROLE_DISPATCH)
+		goto skip;
+
+	estate = CreateExecutorState();
+	ListCell *lc;
+	foreach(lc, tab->newvals)
+	{
+		NewColumnValue *newval = lfirst(lc);
+		proj[newval->attnum -1] = true;
+		newval->exprstate = ExecPrepareExpr((Expr *)newval->expr, estate);
+	}
+
+	/*
+	 * XXX: We need to set an idesc and an sdesc.
+	 * The sdesc will read the data already held into the column (from the
+	 * oldtupleDesc. The tab is holding all the information needed for the
+	 * transformation.
+	 * The idesc is the one that should be holding the new version. It should
+	 * point to the new segment file
+	 */
+	for (int i = 0; i < nseg; i++)
+	{
+		AOCSScanDesc sdesc;
+		TupleTableSlot	  *oldslot;
+
+		if (segInfos[i]->total_tupcount <= 0 ||
+			segInfos[i]->state == AOSEG_STATE_AWAITING_DROP)
+		{
+			/*
+			 * VACUUM may cause appendonly segments with eof=0.
+			 * We only need to add new rows in pg_aocsseg_* in
+			 * this case for each newly added column.  This is
+			 * accomplished by aocs_addcol_emptyvpe() above.
+			 *
+			 * Compaction leaves redundant segments in
+			 * AOSEG_STATE_AWAITING_DROP.  We skip over them too.
+			 */
+			continue;
+		}
+
+		foreach(lc, tab->newvals)
+		{
+			NewColumnValue *ncv = lfirst(lc);
+			AOCSVPInfoEntry vpe = segInfos[i]->vpinfo.entry[ncv->attnum -1];
+
+			elog(NOTICE, "Will get column version " INT64_FORMAT "", vpe.column_version + 1);
+
+			//AOCSFileSegInfoUpdateColumnVersion(rel, segInfos[i]->segno, ncv->attnum -1);
+		}
+
+		Datum *newDatum;
+ 		bool  *newDatumIsNull;
+		AOCSAddColumnDesc idesc;
+		newDatum = palloc0(RelationGetDescr(rel)->natts * sizeof(*newDatum));
+		newDatumIsNull = palloc(RelationGetDescr(rel)->natts * sizeof(*newDatumIsNull));
+
+		oldslot = MakeSingleTupleTableSlot(tab->oldDesc);
+		idesc = aocs_altercol_init(rel, proj);
+
+		/*
+		 * Create new segfiles for new columns for current
+		 * appendonly segment.
+		 */
+		RelFileNodeBackend rnode;
+
+		rnode.node = rel->rd_node;
+		rnode.backend = rel->rd_backend;
+		char *basepath = relpathbackend(rel->rd_node, rel->rd_backend, MAIN_FORKNUM);
+
+		aocs_altercol_newsegfile(idesc, segInfos[i], basepath, rnode);
+
+		sdesc = aocs_beginscan(rel, snapshot, snapshot, tab->oldDesc, proj);
+		while (aocs_getnext(sdesc, ForwardScanDirection, oldslot))
+		{
+ 			MemoryContext oldCxt;
+			ExprContext *econtext;
+
+ 			econtext = GetPerTupleExprContext(estate);
+			memset(newDatum, 0, RelationGetDescr(rel)->natts * sizeof(*newDatum));
+			memset(newDatumIsNull, true, RelationGetDescr(rel)->natts * sizeof(*newDatumIsNull));
+ 			oldCxt = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
+			foreach(lc, tab->newvals)
+			{
+
+				NewColumnValue *newval = lfirst(lc);
+
+ 				econtext->ecxt_scantuple = oldslot;
+ 				newDatum[newval->attnum -1] = ExecEvalExpr(newval->exprstate,
+ 										econtext,
+ 										&newDatumIsNull[newval->attnum -1],
+ 										NULL);
+
+			}
+ 			aocs_altercol_insert_datum(idesc, newDatum, newDatumIsNull);
+ 			MemoryContextSwitchTo(oldCxt);
+ 			ResetExprContext(econtext);
+		}
+		aocs_altercol_finish(idesc);
+		aocs_endscan(sdesc);
+
+		pfree(newDatum);
+		pfree(newDatumIsNull);
+	}
+
+	pfree(proj);
+	FreeExecutorState(estate);
+skip:
+	UnregisterSnapshot(snapshot);
+	heap_close(rel, NoLock);
+
+	return true;
 }
 
 /*

@@ -235,4 +235,13 @@ extern void AppendOnlyStorageWrite_SetFirstRowNum(AppendOnlyStorageWrite *storag
 
 extern char *AppendOnlyStorageWrite_ContextStr(AppendOnlyStorageWrite *storageWrite);
 
+extern void
+MY_AppendOnlyStorageWrite_OpenFile(AppendOnlyStorageWrite *storageWrite,
+								char *filePathName,
+								int version,
+								int64 logicalEof,
+								int64 fileLen_uncompressed,
+								RelFileNodeBackend *relFileNode,
+								int32 segmentFileNum);
+
 #endif   /* CDBAPPENDONLYSTORAGEWRITE_H */

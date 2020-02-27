@@ -1087,6 +1087,134 @@ AOCSFileSegInfoAddCount(Relation prel, int32 segno,
 	heap_close(segrel, RowExclusiveLock);
 }
 
+void
+AOCSFileSegInfoUpdateColumnVersion(Relation prel, int32 segno, int32 columnNum)
+{
+	LockAcquireResult acquireResult;
+
+	Relation	segrel;
+	HeapScanDesc scan;
+
+	AOCSVPInfo *oldvpinfo;
+	AOCSVPInfo *newvpinfo;
+	HeapTuple	oldtup = NULL;
+	HeapTuple	newtup;
+	int			tuple_segno = InvalidFileSegNumber;
+	Datum		d[Natts_pg_aocsseg];
+	bool		isNull;
+	bool		null[Natts_pg_aocsseg] = {0,};
+	bool		repl[Natts_pg_aocsseg] = {0,};
+
+	TupleDesc	tupdesc;
+	int			nvp = RelationGetNumberOfAttributes(prel);
+
+	if (Gp_role == GP_ROLE_UTILITY)
+	{
+		elog(ERROR, "cannot add column in utility mode, relation %s, segno %d",
+			 RelationGetRelationName(prel), segno);
+	}
+
+	acquireResult = LockRelationNoWait(prel, AccessExclusiveLock);
+	if (acquireResult != LOCKACQUIRE_ALREADY_HELD && acquireResult != LOCKACQUIRE_ALREADY_CLEAR)
+	{
+		elog(ERROR, "should already have (transaction-scope) AccessExclusive"
+			 " lock on relation %s, oid %d",
+			 RelationGetRelationName(prel), RelationGetRelid(prel));
+	}
+
+	segrel = heap_open(prel->rd_appendonly->segrelid, RowExclusiveLock);
+	tupdesc = RelationGetDescr(segrel);
+
+	/*
+	 * Since we have the segment-file entry under lock (with
+	 * LockRelationAppendOnlySegmentFile) we can use SnapshotNow.
+	 */
+	scan = heap_beginscan_catalog(segrel, 0, NULL);
+	while (segno != tuple_segno && (oldtup = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	{
+		tuple_segno = DatumGetInt32(fastgetattr(oldtup, Anum_pg_aocs_segno, tupdesc, &isNull));
+		if (isNull)
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("got invalid segno value NULL for tid %s",
+							ItemPointerToString(&oldtup->t_self))));
+	}
+
+	if (!HeapTupleIsValid(oldtup))
+	{
+		ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
+						errmsg("AOCS rel \"%s\" segment \"%d\" does not exist",
+							   RelationGetRelationName(prel), segno)
+						));
+	}
+
+	d[Anum_pg_aocs_segno - 1] = fastgetattr(oldtup, Anum_pg_aocs_segno,
+											tupdesc, &null[Anum_pg_aocs_segno - 1]);
+	Assert(!null[Anum_pg_aocs_segno - 1]);
+	Assert(DatumGetInt32(d[Anum_pg_aocs_segno - 1]) == segno);
+
+	d[Anum_pg_aocs_tupcount - 1] = fastgetattr(oldtup, Anum_pg_aocs_tupcount,
+											   tupdesc,
+											   &null[Anum_pg_aocs_tupcount - 1]);
+	Assert(!null[Anum_pg_aocs_tupcount - 1]);
+
+	d[Anum_pg_aocs_modcount - 1] = fastgetattr(oldtup, Anum_pg_aocs_modcount,
+											   tupdesc,
+											   &null[Anum_pg_aocs_modcount - 1]);
+	Assert(!null[Anum_pg_aocs_modcount - 1]);
+	d[Anum_pg_aocs_modcount - 1] += 1;
+	repl[Anum_pg_aocs_modcount - 1] = true;
+
+	/* new VPInfo having VPEntries with eof=0 */
+	newvpinfo = create_aocs_vpinfo(nvp);
+	{
+		d[Anum_pg_aocs_vpinfo - 1] =
+			fastgetattr(oldtup, Anum_pg_aocs_vpinfo, tupdesc,
+						&null[Anum_pg_aocs_vpinfo - 1]);
+		Assert(!null[Anum_pg_aocs_vpinfo - 1]);
+		struct varlena *v = (struct varlena *) DatumGetPointer(
+															   d[Anum_pg_aocs_vpinfo - 1]);
+		struct varlena *dv = pg_detoast_datum(v);
+
+		Assert(VARSIZE(dv) == aocs_vpinfo_size(nvp));
+		oldvpinfo = (AOCSVPInfo *) dv;
+
+		/* copy existing columns' eofs to new vpinfo */
+		for (int i = 0; i < oldvpinfo->nEntry; ++i)
+		{
+			newvpinfo->entry[i].eof = oldvpinfo->entry[i].eof;
+			newvpinfo->entry[i].eof_uncompressed = oldvpinfo->entry[i].eof_uncompressed;
+			newvpinfo->entry[i].column_version = oldvpinfo->entry[i].column_version;
+		}
+
+		Assert(columnNum < oldvpinfo->nEntry);
+		newvpinfo->entry[columnNum].column_version++;
+		elog(NOTICE, "Done " INT64_FORMAT "", newvpinfo->entry[columnNum].column_version);
+		if (dv != v)
+		{
+			pfree(dv);
+		}
+	}
+	d[Anum_pg_aocs_vpinfo - 1] = PointerGetDatum(newvpinfo);
+	null[Anum_pg_aocs_vpinfo - 1] = false;
+	repl[Anum_pg_aocs_vpinfo - 1] = true;
+
+	newtup = heap_modify_tuple(oldtup, tupdesc, d, null, repl);
+
+	simple_heap_update(segrel, &oldtup->t_self, newtup);
+
+	pfree(newtup);
+	pfree(newvpinfo);
+
+	/*
+	 * Holding RowExclusiveLock lock on pg_aocsseg_* until the ALTER TABLE
+	 * transaction commits/aborts.  Additionally, we are already holding
+	 * AccessExclusive lock on the AOCS relation OID.
+	 */
+	heap_endscan(scan);
+	heap_close(segrel, NoLock);
+}
+
 extern Datum aocsvpinfo_decode(PG_FUNCTION_ARGS);
 Datum
 aocsvpinfo_decode(PG_FUNCTION_ARGS)
@@ -1157,7 +1285,7 @@ gp_aocsseg_internal(PG_FUNCTION_ARGS, Oid aocsRelOid)
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
 		/* build tupdesc for result tuples */
-		tupdesc = CreateTemplateTupleDesc(10, false);
+		tupdesc = CreateTemplateTupleDesc(11, false);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "gp_tid",
 						   TIDOID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "segno",
@@ -1172,11 +1300,13 @@ gp_aocsseg_internal(PG_FUNCTION_ARGS, Oid aocsRelOid)
 						   INT8OID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 7, "eof_uncompressed",
 						   INT8OID, -1, 0);
-		TupleDescInitEntry(tupdesc, (AttrNumber) 8, "modcount",
+		TupleDescInitEntry(tupdesc, (AttrNumber) 8, "column_version",
 						   INT8OID, -1, 0);
-		TupleDescInitEntry(tupdesc, (AttrNumber) 9, "formatversion",
+		TupleDescInitEntry(tupdesc, (AttrNumber) 9, "modcount",
+						   INT8OID, -1, 0);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 10, "formatversion",
 						   INT2OID, -1, 0);
-		TupleDescInitEntry(tupdesc, (AttrNumber) 10, "state",
+		TupleDescInitEntry(tupdesc, (AttrNumber) 11, "state",
 						   INT2OID, -1, 0);
 
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
@@ -1230,8 +1360,8 @@ gp_aocsseg_internal(PG_FUNCTION_ARGS, Oid aocsRelOid)
 	 */
 	while (true)
 	{
-		Datum		values[10];
-		bool		nulls[10];
+		Datum		values[11];
+		bool		nulls[11];
 		HeapTuple	tuple;
 		Datum		result;
 
@@ -1275,9 +1405,10 @@ gp_aocsseg_internal(PG_FUNCTION_ARGS, Oid aocsRelOid)
 		values[4] = Int64GetDatum(aocsSegfile->total_tupcount);
 		values[5] = Int64GetDatum(entry->eof);
 		values[6] = Int64GetDatum(entry->eof_uncompressed);
-		values[7] = Int64GetDatum(aocsSegfile->modcount);
-		values[8] = Int16GetDatum(aocsSegfile->formatversion);
-		values[9] = Int16GetDatum(aocsSegfile->state);
+		values[7] = Int64GetDatum(entry->column_version);
+		values[8] = Int64GetDatum(aocsSegfile->modcount);
+		values[9] = Int16GetDatum(aocsSegfile->formatversion);
+		values[10] = Int16GetDatum(aocsSegfile->state);
 
 		tuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
 		result = HeapTupleGetDatum(tuple);
@@ -1347,7 +1478,7 @@ gp_aocsseg_history(PG_FUNCTION_ARGS)
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
 		/* build tupdesc for result tuples */
-		tupdesc = CreateTemplateTupleDesc(20, false);
+		tupdesc = CreateTemplateTupleDesc(21, false);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "gp_tid",
 						   TIDOID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "gp_xmin",
@@ -1382,11 +1513,13 @@ gp_aocsseg_history(PG_FUNCTION_ARGS)
 						   INT8OID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 17, "eof_uncompressed",
 						   INT8OID, -1, 0);
-		TupleDescInitEntry(tupdesc, (AttrNumber) 18, "modcount",
+		TupleDescInitEntry(tupdesc, (AttrNumber) 18, "column_version",
 						   INT8OID, -1, 0);
-		TupleDescInitEntry(tupdesc, (AttrNumber) 19, "formatversion",
+		TupleDescInitEntry(tupdesc, (AttrNumber) 19, "modcount",
+						   INT8OID, -1, 0);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 20, "formatversion",
 						   INT2OID, -1, 0);
-		TupleDescInitEntry(tupdesc, (AttrNumber) 20, "state",
+		TupleDescInitEntry(tupdesc, (AttrNumber) 21, "state",
 						   INT2OID, -1, 0);
 
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
@@ -1439,8 +1572,8 @@ gp_aocsseg_history(PG_FUNCTION_ARGS)
 	 */
 	while (true)
 	{
-		Datum		values[20];
-		bool		nulls[20];
+		Datum		values[21];
+		bool		nulls[21];
 		HeapTuple	tuple;
 		Datum		result;
 
@@ -1488,9 +1621,10 @@ gp_aocsseg_history(PG_FUNCTION_ARGS)
 		values[14] = Int64GetDatum(aocsSegfile->total_tupcount);
 		values[15] = Int64GetDatum(entry->eof);
 		values[16] = Int64GetDatum(entry->eof_uncompressed);
-		values[17] = Int64GetDatum(aocsSegfile->modcount);
-		values[18] = Int16GetDatum(aocsSegfile->formatversion);
-		values[19] = Int16GetDatum(aocsSegfile->state);
+		values[17] = Int64GetDatum(entry->column_version);
+		values[18] = Int64GetDatum(aocsSegfile->modcount);
+		values[19] = Int16GetDatum(aocsSegfile->formatversion);
+		values[20] = Int16GetDatum(aocsSegfile->state);
 
 		tuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
 		result = HeapTupleGetDatum(tuple);
@@ -1824,7 +1958,7 @@ FreeAllAOCSSegFileInfo(AOCSFileSegInfo **allAOCSSegInfo, int totalSegFiles)
 {
 	Assert(allAOCSSegInfo);
 
-	for (int file_no = 0; file_no < totalSegFiles; file_no++)
+	for (int file_no = 1; file_no < totalSegFiles; file_no++)
 	{
 		Assert(allAOCSSegInfo[file_no] != NULL);
 

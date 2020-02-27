@@ -34,6 +34,7 @@ typedef struct AOCSVPInfoEntry
 {
 	int64		eof;
 	int64		eof_uncompressed;
+	int64		column_version;
 } AOCSVPInfoEntry;
 
 typedef struct AOCSVPInfo
@@ -162,5 +163,7 @@ extern void ClearAOCSFileSegInfo(Relation prel, int segno, FileSegInfoState newS
 extern void SetAOCSFileSegInfoState(Relation parentrel, int segno, FileSegInfoState newState);
 extern int64 gp_update_aocol_master_stats_internal(Relation parentrel, Snapshot appendOnlyMetaDataSnapshot);
 extern float8 aocol_compression_ratio_internal(Relation parentrel);
+
+extern void AOCSFileSegInfoUpdateColumnVersion(Relation relation, int32 segno, int32 columnNum);
 
 #endif

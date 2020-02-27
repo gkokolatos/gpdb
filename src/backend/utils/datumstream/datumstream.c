@@ -787,6 +787,61 @@ destroy_datumstreamread(DatumStreamRead * ds)
 	pfree(ds);
 }
 
+void
+datumstreamwrite_ALTER_AOCS_open_file(DatumStreamWrite *ds, char *fn, int64 eof, int64 eofUncompressed,
+						   RelFileNodeBackend *relFileNode, int32 segmentFileNum, int version)
+{
+	ds->eof = eof;
+	ds->eofUncompress = eofUncompressed;
+
+	if (ds->need_close_file)
+		datumstreamwrite_close_file(ds);
+
+	if (segmentFileNum > 0 && eof == 0)
+	{
+
+		/* XXX: We have not created the xlog_record */
+		Assert(fn);
+		File fd = PathNameOpenFile(fn, O_RDWR | O_CREAT | O_EXCL | PG_BINARY, 0600);
+		if (fd < 0)
+		{
+			int			save_errno = errno;
+
+			/*
+			 * During bootstrap, there are cases where a system relation will be
+			 * accessed (by internal backend processes) before the bootstrap
+			 * script nominally creates it.  Therefore, allow the file to exist
+			 * already, even if isRedo is not set.	(See also mdopen)
+			 */
+			if (IsBootstrapProcessingMode())
+				fd = PathNameOpenFile(fn, O_RDWR | PG_BINARY, 0600);
+			if (fd < 0)
+			{
+				/* be sure to report the error reported by create, not open */
+				errno = save_errno;
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not create relation %s: %m", fn)));
+			}
+		}
+		elog(NOTICE, "Has created file %s", fn);
+	}
+
+	/*
+	 * Open the existing file for write.
+	 */
+	MY_AppendOnlyStorageWrite_OpenFile(&ds->ao_write,
+									fn,
+									version,
+									eof,
+									eofUncompressed,
+									relFileNode,
+									segmentFileNum);
+
+	ds->need_close_file = true;
+
+
+}
 
 void
 datumstreamwrite_open_file(DatumStreamWrite *ds, char *fn, int64 eof, int64 eofUncompressed,

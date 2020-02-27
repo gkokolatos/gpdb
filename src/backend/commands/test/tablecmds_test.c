@@ -43,10 +43,13 @@ test__column_to_scan(void **state)
 	segInfos[0]->vpinfo.nEntry = 3; /* number of columns */
 	segInfos[0]->vpinfo.entry[0].eof = 200;
 	segInfos[0]->vpinfo.entry[0].eof_uncompressed = 200;
+	segInfos[0]->vpinfo.entry[0].column_version = 0;
 	segInfos[0]->vpinfo.entry[1].eof = 100;
 	segInfos[0]->vpinfo.entry[1].eof_uncompressed = 165;
+	segInfos[0]->vpinfo.entry[1].column_version = 0;
 	segInfos[0]->vpinfo.entry[2].eof = 50;
 	segInfos[0]->vpinfo.entry[2].eof_uncompressed = 85;
+	segInfos[0]->vpinfo.entry[2].column_version = 0;
 
 	/* Valid segment, col=1 is the smallest */
 	segInfos[1] = (AOCSFileSegInfo *)
@@ -57,10 +60,13 @@ test__column_to_scan(void **state)
 	segInfos[1]->vpinfo.nEntry = 3; /* number of columns */
 	segInfos[1]->vpinfo.entry[0].eof = 120;
 	segInfos[1]->vpinfo.entry[0].eof_uncompressed = 200;
+	segInfos[1]->vpinfo.entry[0].column_version = 0;
 	segInfos[1]->vpinfo.entry[1].eof = 100;
 	segInfos[1]->vpinfo.entry[1].eof_uncompressed = 100;
+	segInfos[1]->vpinfo.entry[1].column_version = 0;
 	segInfos[1]->vpinfo.entry[2].eof = 320;
 	segInfos[1]->vpinfo.entry[2].eof_uncompressed = 400;
+	segInfos[1]->vpinfo.entry[2].column_version = 0;
 
 	/* AWATING_DROP segment, should be skipped over */
 	segInfos[2] = (AOCSFileSegInfo *)
@@ -71,10 +77,13 @@ test__column_to_scan(void **state)
 	segInfos[2]->vpinfo.nEntry = 3; /* number of columns */
 	segInfos[2]->vpinfo.entry[0].eof = 141;
 	segInfos[2]->vpinfo.entry[0].eof_uncompressed = 200;
+	segInfos[2]->vpinfo.entry[0].column_version = 0;
 	segInfos[2]->vpinfo.entry[1].eof = 51;
 	segInfos[2]->vpinfo.entry[1].eof_uncompressed = 65;
+	segInfos[2]->vpinfo.entry[1].column_version = 0;
 	segInfos[2]->vpinfo.entry[2].eof = 20;
 	segInfos[2]->vpinfo.entry[2].eof_uncompressed = 80;
+	segInfos[2]->vpinfo.entry[2].column_version = 0;
 
 	/* Valid segment, col=0 is the smallest */
 	segInfos[3] = (AOCSFileSegInfo *)
@@ -85,10 +94,13 @@ test__column_to_scan(void **state)
 	segInfos[3]->vpinfo.nEntry = 3; /* number of columns */
 	segInfos[3]->vpinfo.entry[0].eof = 60;
 	segInfos[3]->vpinfo.entry[0].eof_uncompressed = 80;
+	segInfos[3]->vpinfo.entry[0].column_version = 0;
 	segInfos[3]->vpinfo.entry[1].eof = 500;
 	segInfos[3]->vpinfo.entry[1].eof_uncompressed = 650;
+	segInfos[3]->vpinfo.entry[1].column_version = 0;
 	segInfos[3]->vpinfo.entry[2].eof = 100;
 	segInfos[3]->vpinfo.entry[2].eof_uncompressed = 120;
+	segInfos[3]->vpinfo.entry[2].column_version = 0;
 
 	/* AOCSDrop should be called with segno 3 to drop */
 	drop_segno_list = lappend_int(drop_segno_list, 3);
